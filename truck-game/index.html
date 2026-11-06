@@ -1,0 +1,934 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<title>Жёлтый грузовик</title>
+<style>
+  :root{
+    --b:clamp(56px,16vh,104px);
+    --B:clamp(72px,22vh,138px);
+    --gap:clamp(6px,1.4vh,14px);
+  }
+  @media (max-aspect-ratio:1/1){
+    :root{--b:13vw;--B:19vw;--gap:1.3vw}
+  }
+  *{box-sizing:border-box;-webkit-tap-highlight-color:transparent;-webkit-touch-callout:none}
+  html,body{margin:0;height:100%;overflow:hidden;background:#8fd3ff;overscroll-behavior:none;
+    user-select:none;-webkit-user-select:none;touch-action:none;
+    font-family:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
+  canvas{position:fixed;inset:0;width:100%;height:100%;display:block;touch-action:none}
+  #ui{position:fixed;left:0;right:0;bottom:0;display:flex;justify-content:space-between;align-items:flex-end;
+    padding:0 max(12px,env(safe-area-inset-right)) max(10px,env(safe-area-inset-bottom)) max(12px,env(safe-area-inset-left));
+    pointer-events:none;gap:var(--gap)}
+  .grp{display:flex;gap:var(--gap);align-items:flex-end;pointer-events:none}
+  .btn{pointer-events:auto;position:relative;border:clamp(3px,.8vh,6px) solid #fff;color:#fff;cursor:pointer;
+    border-radius:28%;display:flex;flex-direction:column;align-items:center;justify-content:center;
+    padding:0;font:inherit;touch-action:none;outline:none;
+    box-shadow:0 clamp(5px,1vh,9px) 0 rgba(0,0,0,.28),0 10px 18px rgba(0,0,0,.2);
+    transition:transform .06s,box-shadow .06s}
+  .btn.down{transform:translateY(6px) scale(.97);box-shadow:0 2px 0 rgba(0,0,0,.28)}
+  .dir{width:var(--b);height:var(--b)}
+  .dir svg{width:62%;height:62%;fill:#fff;filter:drop-shadow(0 2px 0 rgba(0,0,0,.25))}
+  .h{background:linear-gradient(#5aa9ff,#2f6df0)}
+  .v{background:linear-gradient(#37d6b5,#14a98b)}
+  .act{width:var(--B);height:var(--B)}
+  .act .ico{font-size:calc(var(--B)*.46);line-height:1;filter:drop-shadow(0 2px 0 rgba(0,0,0,.2))}
+  .act .lbl{font-size:clamp(11px,2.4vh,18px);font-weight:800;letter-spacing:.02em;margin-top:2px;text-shadow:0 2px 0 rgba(0,0,0,.25)}
+  .load{background:linear-gradient(#ffa63a,#f06a0a)}
+  .honk{background:linear-gradient(#ff6b6b,#d92b2b)}
+  .pulse{animation:pulse .8s ease-in-out infinite}
+  @keyframes pulse{0%,100%{transform:scale(1);box-shadow:0 8px 0 rgba(0,0,0,.28),0 0 0 0 rgba(255,235,80,.9)}
+    50%{transform:scale(1.1);box-shadow:0 8px 0 rgba(0,0,0,.28),0 0 0 16px rgba(255,235,80,0)}}
+  .pulse.down{animation:none}
+  #mute{position:fixed;top:max(10px,env(safe-area-inset-top));right:max(10px,env(safe-area-inset-right));
+    width:clamp(44px,8vh,64px);height:clamp(44px,8vh,64px);border-radius:50%;border:4px solid #fff;
+    background:rgba(40,60,90,.55);font-size:clamp(22px,4.4vh,34px);cursor:pointer;color:#fff;padding:0;touch-action:none}
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<button id="mute" aria-label="Звук">🔊</button>
+<div id="ui">
+  <div class="grp">
+    <button class="btn dir h" data-k="left" aria-label="Влево"><svg viewBox="0 0 24 24"><path d="M16 3 6 12l10 9z"/></svg></button>
+    <button class="btn dir h" data-k="right" aria-label="Вправо"><svg viewBox="0 0 24 24"><path d="M8 3l10 9-10 9z"/></svg></button>
+    <button class="btn dir v" data-k="up" aria-label="Вперёд"><svg viewBox="0 0 24 24"><path d="M12 4 3 16h18z"/></svg></button>
+    <button class="btn dir v" data-k="down" aria-label="Назад"><svg viewBox="0 0 24 24"><path d="M12 20 3 8h18z"/></svg></button>
+  </div>
+  <div class="grp">
+    <button class="btn act load" id="bLoad" aria-label="Погрузить"><span class="ico">⛏️</span><span class="lbl">Погрузить</span></button>
+    <button class="btn act honk" id="bHonk" aria-label="Гудок"><span class="ico">📣</span><span class="lbl">Гудок</span></button>
+  </div>
+</div>
+
+<script>
+(() => {
+'use strict';
+
+/* ======================= утилиты ======================= */
+const cv = document.getElementById('c');
+const ctx = cv.getContext('2d');
+const PI = Math.PI, TAU = PI * 2;
+const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
+const lerp = (a, b, t) => a + (b - a) * t;
+const ease = t => t * t * (3 - 2 * t);
+const easeOutBack = t => { const c = 1.70158; t = clamp(t, 0, 1) - 1; return 1 + (c + 1) * t * t * t + c * t * t; };
+const rnd = (a, b) => a + Math.random() * (b - a);
+function mulberry(seed) { return function () { seed |= 0; seed = seed + 0x6D2B79F5 | 0; let t = Math.imul(seed ^ seed >>> 15, 1 | seed); t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t; return ((t ^ t >>> 14) >>> 0) / 4294967296; }; }
+
+function rrect(x, y, w, h, r) {
+  ctx.beginPath(); ctx.moveTo(x + r, y);
+  ctx.arcTo(x + w, y, x + w, y + h, r); ctx.arcTo(x + w, y + h, x, y + h, r);
+  ctx.arcTo(x, y + h, x, y, r); ctx.arcTo(x, y, x + w, y, r); ctx.closePath();
+}
+function fs(fill, stroke, lw) {
+  if (fill) { ctx.fillStyle = fill; ctx.fill(); }
+  if (stroke) { ctx.strokeStyle = stroke; ctx.lineWidth = lw || 4; ctx.lineJoin = 'round'; ctx.lineCap = 'round'; ctx.stroke(); }
+}
+function circle(x, y, r, fill, stroke, lw) { ctx.beginPath(); ctx.arc(x, y, r, 0, TAU); fs(fill, stroke, lw); }
+function starPath(x, y, r, rot) {
+  ctx.beginPath();
+  for (let i = 0; i < 10; i++) {
+    const a = rot + i * PI / 5 - PI / 2, rr = i % 2 ? r * .46 : r;
+    ctx.lineTo(x + Math.cos(a) * rr, y + Math.sin(a) * rr);
+  }
+  ctx.closePath();
+}
+function heartPath(s) {
+  ctx.beginPath(); ctx.moveTo(0, s * .35);
+  ctx.bezierCurveTo(-s * 1.1, -s * .4, -s * .5, -s * 1.05, 0, -s * .45);
+  ctx.bezierCurveTo(s * .5, -s * 1.05, s * 1.1, -s * .4, 0, s * .35); ctx.closePath();
+}
+
+/* ======================= размеры ======================= */
+let W = 0, H = 0, dpr = 1, U = 1, WU = 0, HU = 0;
+const L = { horizon: 0, roadTop: 0, roadBot: 0 };
+const WORLD = 3700;
+function resize() {
+  dpr = Math.min(window.devicePixelRatio || 1, 2);
+  W = window.innerWidth; H = window.innerHeight;
+  cv.width = Math.round(W * dpr); cv.height = Math.round(H * dpr);
+  U = Math.min(H / 700, W / 900);
+  WU = W / U; HU = H / U;
+  L.horizon = HU * .46; L.roadTop = HU * .58; L.roadBot = HU * .80;
+}
+window.addEventListener('resize', resize);
+resize();
+const laneY = l => L.roadTop + (L.roadBot - L.roadTop) * (.28 + .64 * l);
+
+/* ======================= мир ======================= */
+const PILES = [
+  { type: 'sand', x: 650 },
+  { type: 'rocks', x: 1250 },
+  { type: 'toys', x: 1850 }
+];
+const SITE = { x0: 2430, gate: 2800, craneX: 3400 };
+
+/* ======================= звук ======================= */
+let ac = null, master = null, soft = null, engOsc = null, engGain = null, noiseBuf = null, muted = false;
+function initAudio() {
+  if (!ac) {
+    try { ac = new (window.AudioContext || window.webkitAudioContext)(); } catch (e) { ac = null; return; }
+    master = ac.createGain(); master.gain.value = muted ? 0 : .8; master.connect(ac.destination);
+    soft = ac.createBiquadFilter(); soft.type = 'lowpass'; soft.frequency.value = 2600; soft.connect(master);
+    noiseBuf = ac.createBuffer(1, ac.sampleRate, ac.sampleRate);
+    const d = noiseBuf.getChannelData(0); for (let i = 0; i < d.length; i++) d[i] = Math.random() * 2 - 1;
+    engOsc = ac.createOscillator(); engOsc.type = 'sawtooth'; engOsc.frequency.value = 46;
+    const lp = ac.createBiquadFilter(); lp.type = 'lowpass'; lp.frequency.value = 150;
+    engGain = ac.createGain(); engGain.gain.value = 0;
+    engOsc.connect(lp); lp.connect(engGain); engGain.connect(master); engOsc.start();
+  }
+  if (ac.state === 'suspended') ac.resume();
+}
+function tone(f, t, d, type, v, f2) {
+  if (!ac) return;
+  const n = ac.currentTime + t, o = ac.createOscillator(), g = ac.createGain();
+  o.type = type || 'sine'; o.frequency.setValueAtTime(f, n);
+  if (f2) o.frequency.exponentialRampToValueAtTime(f2, n + d);
+  g.gain.setValueAtTime(.0001, n); g.gain.exponentialRampToValueAtTime(v, n + .02); g.gain.exponentialRampToValueAtTime(.0001, n + d);
+  o.connect(g); g.connect(soft); o.start(n); o.stop(n + d + .05);
+}
+function noise(t, d, freq, type, v) {
+  if (!ac) return;
+  const n = ac.currentTime + t, s = ac.createBufferSource(), f = ac.createBiquadFilter(), g = ac.createGain();
+  s.buffer = noiseBuf; f.type = type; f.frequency.value = freq; f.Q.value = 1;
+  g.gain.setValueAtTime(.0001, n); g.gain.exponentialRampToValueAtTime(v, n + .05); g.gain.exponentialRampToValueAtTime(.0001, n + d);
+  s.connect(f); f.connect(g); g.connect(master); s.start(n); s.stop(n + d + .05);
+}
+const sHonk = () => { for (let i = 0; i < 2; i++) { tone(392, i * .27, .2, 'square', .09); tone(494, i * .27, .2, 'square', .09); } };
+const sLoad = () => { noise(0, .9, 700, 'bandpass', .35); tone(140, .8, .25, 'triangle', .25, 70); tone(880, 1.2, .25, 'sine', .12); tone(1175, 1.35, .3, 'sine', .12); };
+const sDump = () => { noise(.3, 1.5, 500, 'lowpass', .5); tone(90, .2, .5, 'triangle', .25, 50); tone(70, 2.2, .3, 'triangle', .25, 40); };
+const sBump = () => { tone(260, 0, .2, 'triangle', .2, 150); };
+function sCheer() {
+  [523.25, 659.25, 783.99, 1046.5, 1318.5].forEach((f, i) => tone(f, i * .11, .35, 'triangle', .2));
+  [523.25, 659.25, 783.99, 1046.5].forEach(f => tone(f, .62, .8, 'sine', .11));
+  for (let i = 0; i < 6; i++) tone(rnd(1500, 2600), .7 + i * .09, .18, 'sine', .07);
+}
+function sJingle() { [880, 1108, 1318, 1760, 1318, 1760].forEach((f, i) => tone(f, i * .1, .25, 'sine', .16)); }
+function sBig() { sCheer(); setTimeout(sJingle, 700); }
+
+/* ======================= состояние ======================= */
+const truck = { x: 300, lane: .55, dir: 1, vx: 0, wheel: 0, tilt: 0, cargo: null, fill: 0, honk: 0, scale: 1, y: 0, smokeT: 0 };
+const keys = { left: false, right: false, up: false, down: false };
+let action = null;              // { kind:'load'|'dump', t, dur, pile, spawnT }
+let cam = 0, time = 0;
+let stars = 0, delivered = 0, popT = 0, celebrateT = 0;
+let lb = null;                  // божья коровка (секретный подарок)
+const heaps = [];
+const P = [];
+
+/* ======================= частицы ======================= */
+function add(p) { p.age = 0; p.life = p.life || 1; p.rot = p.rot || 0; p.vr = p.vr || 0; P.push(p); if (P.length > 700) P.shift(); return p; }
+const CONF = ['#ff5c5c', '#ffd233', '#4cd964', '#4aa8ff', '#c77dff', '#ff9f43'];
+function burstStars(x, y, n, spread) {
+  for (let i = 0; i < n; i++) {
+    const a = rnd(0, TAU), v = rnd(120, spread || 420);
+    add({ k: 'star', x, y, vx: Math.cos(a) * v, vy: Math.sin(a) * v - 220, g: 700, s: rnd(10, 22), life: rnd(1.2, 2), vr: rnd(-5, 5) });
+  }
+}
+function burstConfetti(x, y, n) {
+  for (let i = 0; i < n; i++) {
+    const a = rnd(0, TAU), v = rnd(100, 380);
+    add({ k: 'conf', x, y, vx: Math.cos(a) * v, vy: Math.sin(a) * v - 250, g: 500, s: rnd(5, 9), c: CONF[i % CONF.length], life: rnd(1.5, 2.6), vr: rnd(-9, 9) });
+  }
+}
+function hearts(x, y, n) {
+  for (let i = 0; i < n; i++)
+    add({ k: 'heart', x: x + rnd(-30, 30), y, vx: rnd(-50, 50), vy: rnd(-200, -120), g: 0, s: rnd(10, 20), life: rnd(1.2, 1.8), vr: 0 });
+}
+function balloons(x, y, n) {
+  for (let i = 0; i < n; i++)
+    add({ k: 'balloon', x: x + rnd(-60, 60), y: y - rnd(0, 40), vy: rnd(-90, -55), c: CONF[i % CONF.length], ph: rnd(0, 6), s: rnd(22, 30), life: rnd(4, 6) });
+}
+function puff(x, y, s) { add({ k: 'puff', x, y, vx: rnd(-14, 14), vy: rnd(-50, -28), s, c: '#f5f5f5', life: rnd(.7, 1.1) }); }
+
+function updateParticles(dt) {
+  for (let i = P.length - 1; i >= 0; i--) {
+    const p = P[i]; p.age += dt;
+    if (p.age >= p.life) { P.splice(i, 1); continue; }
+    switch (p.k) {
+      case 'fly': {
+        const u = p.age / p.life;
+        p.x = p.sx + (p.ex - p.sx) * u; p.y = p.sy + (p.ey - p.sy) * u - Math.sin(PI * u) * p.arc; p.rot += p.vr * dt;
+        if (p.age + dt >= p.life) puff(p.ex, p.ey, 8);
+        break;
+      }
+      case 'drop':
+        if (!p.landed) {
+          p.vy += 1400 * dt; p.x += p.vx * dt; p.y += p.vy * dt; p.rot += p.vr * dt;
+          if (p.y >= p.gy) { p.y = p.gy - rnd(0, 8); p.landed = true; p.vx = p.vy = 0; }
+        }
+        break;
+      case 'puff': p.x += p.vx * dt; p.y += p.vy * dt; break;
+      case 'balloon': p.y += p.vy * dt; p.x += Math.sin(p.age * 2 + p.ph) * 22 * dt; break;
+      default: p.vy += (p.g || 0) * dt; p.x += p.vx * dt; p.y += p.vy * dt; p.rot += p.vr * dt;
+    }
+  }
+}
+
+/* ======================= рисование: мелочи ======================= */
+const TOYS = ['cubeR', 'cubeB', 'ball', 'bear', 'cubeG', 'star', 'cubeY'];
+function drawItem(kind, x, y, s) {
+  ctx.save(); ctx.translate(x, y);
+  const cube = c => {
+    rrect(-s / 2, -s / 2, s, s, s * .16); fs(c, '#3b2a14', Math.max(2, s * .1));
+    ctx.fillStyle = 'rgba(255,255,255,.35)'; ctx.fillRect(-s * .38, -s * .38, s * .3, s * .12);
+    circle(0, s * .04, s * .17, 'rgba(255,255,255,.75)');
+  };
+  switch (kind) {
+    case 'cubeR': cube('#ff5252'); break;
+    case 'cubeB': cube('#3e8bff'); break;
+    case 'cubeG': cube('#3ecf6a'); break;
+    case 'cubeY': cube('#ffd13a'); break;
+    case 'ball':
+      circle(0, 0, s * .52, '#ff6aa8', '#3b2a14', Math.max(2, s * .1));
+      ctx.save(); ctx.beginPath(); ctx.arc(0, 0, s * .5, 0, TAU); ctx.clip();
+      ctx.fillStyle = '#fff'; ctx.fillRect(-s, -s * .14, s * 2, s * .28);
+      ctx.fillStyle = '#4aa8ff'; ctx.fillRect(-s, s * .14, s * 2, s * .18); ctx.restore();
+      break;
+    case 'bear':
+      circle(-s * .36, -s * .38, s * .17, '#a8693a', '#3b2a14', Math.max(2, s * .08));
+      circle(s * .36, -s * .38, s * .17, '#a8693a', '#3b2a14', Math.max(2, s * .08));
+      circle(0, 0, s * .5, '#c98a52', '#3b2a14', Math.max(2, s * .1));
+      circle(0, s * .14, s * .22, '#f1d2a8');
+      circle(-s * .17, -s * .08, s * .06, '#222'); circle(s * .17, -s * .08, s * .06, '#222');
+      circle(0, s * .08, s * .07, '#3b2a14');
+      break;
+    case 'star':
+      starPath(0, 0, s * .62, 0); fs('#ffd633', '#3b2a14', Math.max(2, s * .09)); break;
+  }
+  ctx.restore();
+}
+const ROCK_R = [1, .92, 1.06, .9, 1, .94, 1.05];
+function drawRock(x, y, r, shade) {
+  ctx.save(); ctx.translate(x, y);
+  ctx.beginPath();
+  for (let i = 0; i < 7; i++) { const a = i / 7 * TAU - .4; ctx.lineTo(Math.cos(a) * r * ROCK_R[i], Math.sin(a) * r * .82 * ROCK_R[i]); }
+  ctx.closePath();
+  fs(shade || '#9aa1ad', '#454a55', Math.max(2, r * .12));
+  ctx.fillStyle = 'rgba(255,255,255,.35)'; ctx.beginPath(); ctx.ellipse(-r * .3, -r * .3, r * .3, r * .16, -.5, 0, TAU); ctx.fill();
+  ctx.strokeStyle = 'rgba(40,44,52,.55)'; ctx.lineWidth = Math.max(1.5, r * .06);
+  ctx.beginPath(); ctx.moveTo(r * .1, -r * .1); ctx.lineTo(r * .3, r * .15); ctx.lineTo(r * .15, r * .3); ctx.stroke();
+  ctx.restore();
+}
+function drawPile(type, x, y, s) {
+  ctx.save(); ctx.translate(x, y); ctx.scale(s, s);
+  ctx.fillStyle = 'rgba(0,0,0,.2)'; ctx.beginPath(); ctx.ellipse(0, 4, 140, 14, 0, 0, TAU); ctx.fill();
+  if (type === 'sand') {
+    ctx.beginPath(); ctx.moveTo(-130, 0); ctx.bezierCurveTo(-95, -8, -62, -95, 0, -115); ctx.bezierCurveTo(62, -95, 95, -8, 130, 0); ctx.closePath();
+    const g = ctx.createLinearGradient(0, -115, 0, 0); g.addColorStop(0, '#f8dc86'); g.addColorStop(1, '#d9a94a');
+    fs(g, '#8a5a1a', 5);
+    ctx.fillStyle = 'rgba(255,255,255,.28)'; ctx.beginPath(); ctx.ellipse(-30, -78, 30, 12, -.6, 0, TAU); ctx.fill();
+    const r = mulberry(7); ctx.fillStyle = 'rgba(138,90,26,.45)';
+    for (let i = 0; i < 26; i++) { const px = rnd2(r, -90, 90), py = -rnd2(r, 6, 60); if (Math.abs(px) < 120 - py * .9) { ctx.beginPath(); ctx.arc(px, py, 2.2, 0, TAU); ctx.fill(); } }
+    // ведёрко и лопатка
+    ctx.beginPath(); ctx.moveTo(62, -2); ctx.lineTo(112, -2); ctx.lineTo(104, -44); ctx.lineTo(70, -44); ctx.closePath(); fs('#ff5252', '#5a1a1a', 4);
+    ctx.fillStyle = '#ffe14a'; ctx.fillRect(68, -30, 38, 8);
+    ctx.strokeStyle = '#5a1a1a'; ctx.lineWidth = 4; ctx.beginPath(); ctx.arc(87, -46, 20, PI, TAU); ctx.stroke();
+    ctx.save(); ctx.translate(-80, -10); ctx.rotate(-.5); rrect(-4, -62, 8, 62, 3); fs('#3e8bff', '#1a2f66', 3); rrect(-14, -80, 28, 26, 7); fs('#3e8bff', '#1a2f66', 3); ctx.restore();
+  } else if (type === 'rocks') {
+    [[-78, -34, 44, '#8f96a3'], [8, -40, 52, '#a3aab6'], [82, -30, 40, '#8f96a3'], [-34, -92, 38, '#b0b7c2'], [40, -92, 34, '#979eab'], [4, -132, 28, '#a9b0bc']]
+      .forEach(a => drawRock(a[0], a[1], a[2], a[3]));
+  } else {
+    [[-90, -22, 40, 'cubeB'], [92, -20, 38, 'cubeY'], [-30, -26, 46, 'ball'], [34, -36, 44, 'cubeR'], [-60, -70, 44, 'star'], [4, -86, 56, 'bear'], [64, -84, 38, 'cubeG']]
+      .forEach(a => drawItem(a[3], a[0], a[1], a[2]));
+  }
+  ctx.restore();
+}
+function rnd2(r, a, b) { return a + r() * (b - a); }
+
+/* ======================= грузовик ======================= */
+function rimY(x) { return -62 - 18 * (x - 14) / 148; }
+function drawCargo(type, fill) {
+  if (!type || fill <= .01) return;
+  if (type === 'sand') {
+    ctx.beginPath(); ctx.moveTo(14, rimY(14) + 12);
+    const N = 14;
+    for (let i = 0; i <= N; i++) { const x = 14 + 136 * i / N, k = Math.sin(PI * i / N); ctx.lineTo(x, rimY(x) + 8 - fill * (6 + 46 * Math.pow(k, .7))); }
+    ctx.lineTo(150, rimY(150) + 12); ctx.closePath();
+    const g = ctx.createLinearGradient(0, -130, 0, -60); g.addColorStop(0, '#f8dc86'); g.addColorStop(1, '#d9a94a');
+    fs(g, '#8a5a1a', 4);
+    ctx.fillStyle = 'rgba(138,90,26,.5)';
+    for (let i = 0; i < 9; i++) { const x = 30 + i * 14; ctx.beginPath(); ctx.arc(x, rimY(x) - 6 - (i % 3) * 7 * fill, 2, 0, TAU); ctx.fill(); }
+  } else {
+    const n = 7;
+    for (let i = 0; i < n; i++) {
+      const f = clamp(fill * n - i, 0, 1); if (f <= 0) continue;
+      const x = 24 + (i + .5) / n * 124, base = rimY(x) + 8, up = i % 2 ? 14 : 0;
+      if (type === 'rocks') { const r = (i % 2 ? 24 : 30) * f; drawRock(x, base - r * .6 - up, r, i % 3 ? '#9aa1ad' : '#b0b7c2'); }
+      else { const s = 30 * f; drawItem(TOYS[i % TOYS.length], x, base - s * .4 - up, s); }
+    }
+  }
+}
+function wheel(cx, cy, r, ang) {
+  circle(cx, cy, r, '#2b2f38', '#12141a', 3);
+  ctx.strokeStyle = '#454b57'; ctx.lineWidth = 4;
+  for (let i = 0; i < 10; i++) { const a = ang + i * PI / 5; ctx.beginPath(); ctx.moveTo(cx + Math.cos(a) * (r - 7), cy + Math.sin(a) * (r - 7)); ctx.lineTo(cx + Math.cos(a) * (r - 1), cy + Math.sin(a) * (r - 1)); ctx.stroke(); }
+  circle(cx, cy, r * .56, '#d9dde4', '#7b818c', 3);
+  for (let i = 0; i < 5; i++) { const a = ang * 1 + i * TAU / 5; circle(cx + Math.cos(a) * r * .3, cy + Math.sin(a) * r * .3, 2.6, '#555b66'); }
+  circle(cx, cy, r * .12, '#555b66');
+}
+function drawTruck() {
+  const T = truck, st = T.scale;
+  const moving = Math.min(1, Math.abs(T.vx));
+  const bob = Math.abs(Math.sin(time * 14)) * 2.2 * moving + Math.sin(time * 3) * .7;
+  const wig = T.honk > 0 ? Math.sin(time * 55) * .03 * T.honk : 0;
+  ctx.save();
+  ctx.translate(T.x, T.y);
+  ctx.fillStyle = 'rgba(0,0,0,.24)'; ctx.beginPath(); ctx.ellipse(0, 3, 178 * st, 15 * st, 0, 0, TAU); ctx.fill();
+  ctx.translate(0, -bob * st);
+  ctx.scale(T.dir * st * (1 + wig), st * (1 - wig));
+
+  // шасси
+  rrect(-152, -86, 304, 30, 9); fs('#3f4756', '#1c2029', 4);
+  // поршень
+  const tc = Math.cos(T.tilt), ts = Math.sin(T.tilt);
+  ctx.lineCap = 'round';
+  ctx.strokeStyle = '#2b3039'; ctx.lineWidth = 14; ctx.beginPath(); ctx.moveTo(-70, -80); ctx.lineTo(-148 + 80 * tc, -86 - 80 * ts); ctx.stroke();
+  ctx.strokeStyle = '#b9c0cc'; ctx.lineWidth = 7; ctx.beginPath(); ctx.moveTo(-70, -80); ctx.lineTo(-148 + 80 * tc, -86 - 80 * ts); ctx.stroke();
+
+  // кузов
+  ctx.save(); ctx.translate(-148, -86); ctx.rotate(-T.tilt);
+  drawCargo(truck.cargo, truck.fill);
+  ctx.beginPath(); ctx.moveTo(0, 0); ctx.lineTo(152, 0); ctx.lineTo(164, -80); ctx.lineTo(14, -62); ctx.closePath();
+  const bg = ctx.createLinearGradient(0, -80, 0, 0); bg.addColorStop(0, '#ffd84d'); bg.addColorStop(1, '#f5b014');
+  fs(bg, '#5a3a00', 5);
+  ctx.strokeStyle = '#d98b00'; ctx.lineWidth = 7; ctx.beginPath(); ctx.moveTo(18, -62); ctx.lineTo(160, -79); ctx.stroke();
+  ctx.fillStyle = 'rgba(255,255,255,.35)'; ctx.beginPath(); ctx.moveTo(14, -48); ctx.lineTo(150, -64); ctx.lineTo(150, -58); ctx.lineTo(14, -42); ctx.closePath(); ctx.fill();
+  [34, 74, 114, 148].forEach(x => circle(x, -22 - (x - 34) * .02, 3.4, '#8a5a00'));
+  ctx.restore();
+
+  // выхлопная труба
+  rrect(1, -196, 9, 112, 3); fs('#9aa1ad', '#3d424c', 3);
+  rrect(-1, -202, 13, 9, 3); fs('#6d7380', '#3d424c', 3);
+
+  // кабина
+  ctx.beginPath(); ctx.moveTo(8, -58); ctx.lineTo(8, -150); ctx.quadraticCurveTo(8, -170, 30, -170); ctx.lineTo(88, -170);
+  ctx.quadraticCurveTo(101, -170, 109, -157); ctx.lineTo(141, -106); ctx.quadraticCurveTo(152, -90, 152, -76); ctx.lineTo(152, -58); ctx.closePath();
+  const cg = ctx.createLinearGradient(0, -170, 0, -58); cg.addColorStop(0, '#ffe066'); cg.addColorStop(1, '#ffb81c');
+  fs(cg, '#5a3a00', 5);
+  ctx.fillStyle = '#ff8a1f'; ctx.fillRect(9, -78, 142, 10);   // оранжевая полоса
+  // окно
+  ctx.beginPath(); ctx.moveTo(28, -153); ctx.lineTo(84, -153); ctx.quadraticCurveTo(92, -153, 97, -146); ctx.lineTo(120, -113); ctx.quadraticCurveTo(122, -108, 116, -108); ctx.lineTo(28, -108); ctx.closePath();
+  fs('#c8ecff', '#5a3a00', 4);
+  ctx.fillStyle = 'rgba(255,255,255,.55)'; ctx.beginPath(); ctx.moveTo(34, -150); ctx.lineTo(48, -150); ctx.lineTo(34, -112); ctx.closePath(); ctx.fill();
+  // водитель
+  circle(66, -128, 15, '#ffd9b3', '#7a4a1a', 2.5);
+  ctx.beginPath(); ctx.arc(66, -131, 16.5, PI, TAU); ctx.closePath(); fs('#ff7a1a', '#7a3a00', 2.5);
+  ctx.fillStyle = '#ff7a1a'; ctx.fillRect(46, -132, 40, 5);
+  circle(72, -126, 2.4, '#222'); circle(61, -126, 2.4, '#222');
+  ctx.strokeStyle = '#a0402a'; ctx.lineWidth = 2.4; ctx.beginPath(); ctx.arc(67, -122, 6, .2 * PI, .85 * PI); ctx.stroke();
+  // дверь, ручка, зеркало
+  ctx.strokeStyle = 'rgba(90,58,0,.55)'; ctx.lineWidth = 3; ctx.beginPath(); ctx.moveTo(30, -108); ctx.lineTo(30, -60); ctx.moveTo(30, -60); ctx.lineTo(118, -60); ctx.stroke();
+  rrect(38, -100, 20, 6, 3); fs('#7a4a00');
+  rrect(122, -126, 8, 22, 3); fs('#3d424c');
+  // фара, бампер, задний фонарь
+  circle(145, -88, 10, '#fff7b0', '#5a3a00', 3);
+  rrect(138, -68, 22, 14, 4); fs('#c9ced8', '#3d424c', 3);
+  rrect(-155, -82, 9, 18, 3); fs('#ff3b3b', '#7a0f0f', 2.5);
+
+  // колёса
+  const r = 34 / 1;
+  [-95, 95].forEach(cx => {
+    wheel(cx, -34, r, T.wheel * T.dir);
+    ctx.beginPath(); ctx.arc(cx, -34, 42, PI + .12, TAU - .12); ctx.strokeStyle = '#d98b00'; ctx.lineWidth = 9; ctx.lineCap = 'round'; ctx.stroke();
+    ctx.beginPath(); ctx.arc(cx, -34, 46.5, PI + .12, TAU - .12); ctx.strokeStyle = '#5a3a00'; ctx.lineWidth = 3; ctx.stroke();
+  });
+  ctx.restore();
+
+  // «БИ-БИ!»
+  if (T.honk > 0) {
+    const u = 1 - T.honk, a = clamp(T.honk * 3, 0, 1);
+    const bx = T.x + T.dir * 120 * st, by = T.y - 245 * st;
+    ctx.save(); ctx.globalAlpha = a;
+    ctx.translate(bx, by - u * 14); ctx.scale(easeOutBack(u * 6) * 1, easeOutBack(u * 6));
+    rrect(-72, -30, 144, 58, 26); fs('#fff', '#d92b2b', 5);
+    ctx.beginPath(); ctx.moveTo(-10, 28); ctx.lineTo(-24 * T.dir, 48); ctx.lineTo(14, 28); ctx.closePath(); fs('#fff', '#d92b2b', 5);
+    ctx.fillStyle = '#fff'; ctx.fillRect(-14, 24, 28, 8);
+    ctx.fillStyle = '#d92b2b'; ctx.font = '900 38px system-ui,sans-serif'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.fillText('БИ-БИ!', 0, 0);
+    ctx.restore();
+    // волны
+    ctx.save(); ctx.translate(T.x + T.dir * 150 * st, T.y - 135 * st);
+    ctx.strokeStyle = '#ffcf2e'; ctx.lineWidth = 6; ctx.lineCap = 'round';
+    for (let i = 0; i < 3; i++) {
+      const rr = 26 + i * 22 + u * 40; ctx.globalAlpha = a * (1 - i * .25);
+      ctx.beginPath(); ctx.arc(0, 0, rr, T.dir > 0 ? -.7 : PI - .7, T.dir > 0 ? .7 : PI + .7); ctx.stroke();
+    }
+    ctx.restore();
+  }
+}
+
+/* ======================= божья коровка ======================= */
+function drawLady() {
+  const a = ease(clamp(lb.appear, 0, 1));
+  const baseY = L.roadTop + 18;
+  const jump = lb.jump > 0 ? Math.sin((1 - lb.jump) * PI) * 90 : 0;
+  const y = baseY - (1 - a) * 420 - jump + Math.sin(time * 3) * 3;
+  // подарок
+  ctx.save(); ctx.translate(lb.x + 105, baseY);
+  rrect(-32, -48, 64, 48, 6); fs('#8b5cf6', '#3b1d8a', 4);
+  ctx.fillStyle = '#ffd233'; ctx.fillRect(-7, -48, 14, 48);
+  const open = clamp(lb.gift, 0, 1);
+  ctx.save(); ctx.translate(-36, -48); ctx.rotate(-open * 1.1); ctx.translate(0, -(open * 8));
+  rrect(0, -18, 72, 18, 5); fs('#a78bfa', '#3b1d8a', 4); ctx.fillStyle = '#ffd233'; ctx.fillRect(29, -18, 14, 18);
+  circle(28, -26, 9, '#ffd233', '#a8740a', 3); circle(44, -26, 9, '#ffd233', '#a8740a', 3);
+  ctx.restore(); ctx.restore();
+  // сама коровка
+  ctx.save(); ctx.translate(lb.x, y); ctx.rotate(Math.sin(time * 4) * .05); ctx.scale(1.15, 1.15);
+  ctx.fillStyle = 'rgba(0,0,0,.2)'; ctx.beginPath(); ctx.ellipse(0, 56 + jump / 1.15 + (1 - a) * 420 / 1.15, 40, 8, 0, 0, TAU); ctx.fill();
+  ctx.strokeStyle = '#1c1c1c'; ctx.lineWidth = 5; ctx.lineCap = 'round';
+  [-1, 1].forEach(s => [18, 34, 48].forEach((ly, i) => { ctx.beginPath(); ctx.moveTo(s * 30, ly); ctx.lineTo(s * (46 + i * 3), ly + 12); ctx.stroke(); }));
+  const flap = lb.jump > 0 ? Math.sin(time * 40) * .25 : 0;
+  ctx.save(); ctx.rotate(flap); circle(0, 10, 44, null); ctx.restore();
+  const bg = ctx.createRadialGradient(-14, -6, 6, 0, 10, 48); bg.addColorStop(0, '#ff7a5a'); bg.addColorStop(1, '#e02020');
+  circle(0, 10, 44, bg, '#4a0a0a', 4);
+  ctx.strokeStyle = '#1c1c1c'; ctx.lineWidth = 4; ctx.beginPath(); ctx.moveTo(0, -30); ctx.lineTo(0, 54); ctx.stroke();
+  [[-24, 8, 8], [24, 8, 8], [-16, 32, 7], [16, 32, 7], [-30, 26, 0], [0, 0, 0]].forEach(s => { if (s[2]) circle(s[0], s[1], s[2], '#1c1c1c'); });
+  ctx.fillStyle = 'rgba(255,255,255,.4)'; ctx.beginPath(); ctx.ellipse(-24, -10, 10, 6, -.6, 0, TAU); ctx.fill();
+  // голова
+  circle(0, -30, 27, '#222', '#000', 3);
+  circle(-10, -34, 9, '#fff'); circle(10, -34, 9, '#fff');
+  circle(-8, -33, 4.2, '#111'); circle(12, -33, 4.2, '#111');
+  ctx.strokeStyle = '#ff9db1'; ctx.lineWidth = 3.4; ctx.beginPath(); ctx.arc(0, -24, 9, .15 * PI, .85 * PI); ctx.stroke();
+  circle(-18, -24, 4, 'rgba(255,120,150,.7)'); circle(18, -24, 4, 'rgba(255,120,150,.7)');
+  ctx.strokeStyle = '#222'; ctx.lineWidth = 3;
+  [-1, 1].forEach(s => { ctx.beginPath(); ctx.moveTo(s * 10, -54); ctx.quadraticCurveTo(s * 22, -78, s * 34, -72); ctx.stroke(); circle(s * 34, -72, 4.5, '#222'); });
+  ctx.restore();
+}
+
+/* ======================= кран и стройка ======================= */
+function drawCrane(x, baseY, h, jibL, t, sc, details) {
+  ctx.save(); ctx.translate(x, baseY); ctx.scale(sc, sc);
+  const y = -h;
+  const OUT = '#5a3a00', YEL = '#ffc933';
+  rrect(-34, -14, 68, 14, 4); fs('#7b818c', '#3d424c', 3);
+  // башня
+  ctx.lineCap = 'round';
+  [[-14, 10, OUT], [14, 10, OUT], [-14, 5, YEL], [14, 5, YEL]].forEach(p => { ctx.strokeStyle = p[2]; ctx.lineWidth = p[1]; ctx.beginPath(); ctx.moveTo(p[0], -14); ctx.lineTo(p[0], y); ctx.stroke(); });
+  const n = Math.floor((h - 14) / 36);
+  [[7, OUT], [3.6, YEL]].forEach(p => {
+    ctx.strokeStyle = p[1]; ctx.lineWidth = p[0]; ctx.beginPath();
+    for (let i = 0; i < n; i++) { const y0 = -14 - i * 36, y1 = -14 - (i + 1) * 36; ctx.moveTo(i % 2 ? 14 : -14, y0); ctx.lineTo(i % 2 ? -14 : 14, y1); }
+    ctx.stroke();
+  });
+  // стрела
+  ctx.beginPath(); ctx.moveTo(-jibL, y + 6); ctx.lineTo(70, y + 6); ctx.lineTo(70, y - 8); ctx.lineTo(-jibL, y - 8); ctx.closePath(); fs(YEL, OUT, 4);
+  ctx.strokeStyle = OUT; ctx.lineWidth = 3; ctx.beginPath();
+  for (let xx = -jibL; xx < 60; xx += 34) { ctx.moveTo(xx, y + 6); ctx.lineTo(xx + 17, y - 8); ctx.lineTo(xx + 34, y + 6); }
+  ctx.stroke();
+  // мачта и тросы
+  ctx.beginPath(); ctx.moveTo(-16, y - 8); ctx.lineTo(0, y - 64); ctx.lineTo(16, y - 8); ctx.closePath(); fs(YEL, OUT, 4);
+  ctx.strokeStyle = '#3d424c'; ctx.lineWidth = 2.4;
+  ctx.beginPath(); ctx.moveTo(0, y - 64); ctx.lineTo(-jibL * .9, y - 8); ctx.moveTo(0, y - 64); ctx.lineTo(-jibL * .45, y - 8); ctx.moveTo(0, y - 64); ctx.lineTo(62, y - 8); ctx.stroke();
+  // противовес
+  rrect(34, y + 6, 36, 34, 4); fs('#8b919d', '#3d424c', 3);
+  // кабина
+  rrect(-40, y + 6, 30, 28, 5); fs('#fff', OUT, 3.5); rrect(-35, y + 11, 20, 12, 3); fs('#8ad3ff');
+  if (details) {
+    circle(0, y - 66, 5, Math.sin(t * 5) > 0 ? '#ff3b3b' : '#7a1a1a');
+    // тележка, трос, крюк, груз
+    const tx = -jibL + 46, len = 120 + Math.sin(t * .8) * 26, sway = Math.sin(t * 1.1) * 7;
+    rrect(tx - 12, y + 6, 24, 12, 3); fs('#3d424c');
+    ctx.strokeStyle = '#2b2f38'; ctx.lineWidth = 3; ctx.beginPath(); ctx.moveTo(tx, y + 18); ctx.lineTo(tx + sway, y + len); ctx.stroke();
+    ctx.save(); ctx.translate(tx + sway, y + len);
+    ctx.strokeStyle = '#3d424c'; ctx.lineWidth = 5; ctx.beginPath(); ctx.arc(0, 8, 9, -.4, PI + .4, true); ctx.stroke();
+    ctx.strokeStyle = '#2b2f38'; ctx.lineWidth = 2; ctx.beginPath(); ctx.moveTo(-26, 34); ctx.lineTo(0, 4); ctx.lineTo(26, 34); ctx.stroke();
+    rrect(-34, 34, 68, 22, 3); fs('#d9763a', '#5a2a0a', 3);
+    ctx.strokeStyle = '#5a2a0a'; ctx.lineWidth = 2; for (let i = -22; i <= 22; i += 14) { ctx.beginPath(); ctx.moveTo(i, 34); ctx.lineTo(i, 56); ctx.stroke(); }
+    ctx.restore();
+  }
+  ctx.restore();
+}
+function drawBuildingFrame(x, base) {
+  const w = 330, fh = 92, fl = 3;
+  ctx.save(); ctx.translate(x, base);
+  // кирпичная часть первого этажа
+  ctx.fillStyle = '#e6926a'; ctx.fillRect(0, -fh, 150, fh);
+  ctx.strokeStyle = 'rgba(120,50,20,.45)'; ctx.lineWidth = 2;
+  for (let r = 0; r < 6; r++) { const yy = -fh + r * 15.3; ctx.beginPath(); ctx.moveTo(0, yy); ctx.lineTo(150, yy); ctx.stroke(); for (let c = (r % 2) * 12; c < 150; c += 24) { ctx.beginPath(); ctx.moveTo(c, yy); ctx.lineTo(c, yy + 15); ctx.stroke(); } }
+  // колонны и перекрытия
+  for (let i = 0; i <= fl; i++) { rrect(-8, -i * fh - 12, w + 16, 14, 3); fs('#b8bdc8', '#5a5f6b', 3); }
+  for (let i = 0; i < fl; i++) for (let c = 0; c < 4; c++) { rrect(c * (w - 14) / 3, -(i + 1) * fh, 14, fh - 6, 2); fs('#c9ced8', '#5a5f6b', 3); }
+  // сетка безопасности
+  ctx.fillStyle = 'rgba(255,140,40,.55)'; ctx.fillRect(150, -2 * fh + 6, w - 150, fh - 20);
+  ctx.strokeStyle = 'rgba(255,255,255,.5)'; ctx.lineWidth = 1.5;
+  for (let xx = 150; xx < w; xx += 14) { ctx.beginPath(); ctx.moveTo(xx, -2 * fh + 6); ctx.lineTo(xx, -fh - 14); ctx.stroke(); }
+  // флажок
+  ctx.strokeStyle = '#5a3a00'; ctx.lineWidth = 4; ctx.beginPath(); ctx.moveTo(w - 30, -fl * fh - 12); ctx.lineTo(w - 30, -fl * fh - 64); ctx.stroke();
+  ctx.beginPath(); ctx.moveTo(w - 30, -fl * fh - 64); ctx.lineTo(w + 6, -fl * fh - 52); ctx.lineTo(w - 30, -fl * fh - 40); ctx.closePath(); fs('#ff5252', '#7a1a1a', 3);
+  ctx.restore();
+}
+function drawCone(x, y, s) {
+  ctx.save(); ctx.translate(x, y); ctx.scale(s, s);
+  rrect(-18, -6, 36, 8, 3); fs('#333', '#111', 2);
+  ctx.beginPath(); ctx.moveTo(-14, -6); ctx.lineTo(-5, -50); ctx.lineTo(5, -50); ctx.lineTo(14, -6); ctx.closePath(); fs('#ff7a1a', '#7a3a00', 3);
+  ctx.fillStyle = '#fff'; ctx.beginPath(); ctx.moveTo(-10, -22); ctx.lineTo(10, -22); ctx.lineTo(8, -32); ctx.lineTo(-8, -32); ctx.closePath(); ctx.fill();
+  ctx.restore();
+}
+function drawGate(x, base) {
+  ctx.save(); ctx.translate(x, base);
+  [-1, 1].forEach(s => {
+    rrect(s * 150 - 7, -150, 14, 150, 3); fs('#ffd233', '#5a3a00', 3);
+    ctx.save(); ctx.beginPath(); ctx.rect(s * 150 - 7, -150, 14, 150); ctx.clip();
+    ctx.fillStyle = '#222'; for (let i = 0; i < 6; i++) { ctx.beginPath(); ctx.moveTo(s * 150 - 8, -150 + i * 26); ctx.lineTo(s * 150 + 8, -150 + i * 26 - 12); ctx.lineTo(s * 150 + 8, -150 + i * 26 + 2); ctx.lineTo(s * 150 - 8, -150 + i * 26 + 14); ctx.closePath(); ctx.fill(); }
+    ctx.restore();
+  });
+  // гирлянда флажков
+  ctx.lineWidth = 3; ctx.strokeStyle = '#5a3a00'; ctx.beginPath(); ctx.moveTo(-150, -144); ctx.quadraticCurveTo(0, -100, 150, -144); ctx.stroke();
+  for (let i = 1; i < 11; i++) {
+    const u = i / 11, px = -150 + 300 * u, py = -144 + 2 * u * (1 - u) * 88 + 2;
+    ctx.beginPath(); ctx.moveTo(px - 9, py); ctx.lineTo(px + 9, py); ctx.lineTo(px, py + 22); ctx.closePath(); fs(CONF[i % CONF.length], '#333', 1.5);
+  }
+  ctx.restore();
+}
+
+/* ======================= фон ======================= */
+const decor = (() => {
+  const r = mulberry(2024);
+  const clouds = [], trees = [], flowers = [], skyline = [], hills = [];
+  for (let i = 0; i < 9; i++) clouds.push({ x: r() * 2400, y: 30 + r() * 150, s: .7 + r() * .8, sp: 6 + r() * 8 });
+  let x = 0; const pastel = ['#c7d8f5', '#f5d6c7', '#d4ecd2', '#f4e4a8', '#e0cdf0', '#bfe3ea'];
+  while (x < 2500) { const w = 60 + r() * 60, h = 70 + r() * 140; skyline.push({ x, w, h, c: pastel[Math.floor(r() * pastel.length)], cr: r() < .12 }); x += w + r() * 14; }
+  for (let tx = 120; tx < 2350; tx += 130 + r() * 170) trees.push({ x: tx, s: .8 + r() * .6, t: r() < .5 ? 0 : 1 });
+  for (let i = 0; i < 160; i++) flowers.push({ x: r() * WORLD, y: r(), c: ['#fff', '#ff7aa8', '#ffd233', '#c77dff'][Math.floor(r() * 4)] });
+  return { clouds, trees, flowers, skyline };
+})();
+
+function drawCloud(x, y, s) {
+  ctx.save(); ctx.translate(x, y); ctx.scale(s, s); ctx.fillStyle = 'rgba(255,255,255,.95)';
+  ctx.beginPath(); ctx.arc(0, 0, 28, 0, TAU); ctx.arc(34, -14, 36, 0, TAU); ctx.arc(76, -2, 30, 0, TAU); ctx.arc(40, 10, 30, 0, TAU); ctx.fill();
+  ctx.fillRect(0, 0, 76, 28); ctx.beginPath(); ctx.arc(0, 14, 14, 0, TAU); ctx.arc(76, 14, 14, 0, TAU); ctx.fill();
+  ctx.restore();
+}
+function drawTree(x, base, s, t) {
+  ctx.save(); ctx.translate(x, base); ctx.scale(s, s);
+  rrect(-9, -70, 18, 72, 5); fs('#a8693a', '#5a3a1a', 3);
+  if (t === 0) { circle(0, -104, 46, '#4cc24a', '#2a6a28', 4); circle(-26, -80, 30, '#58cf55', '#2a6a28', 4); circle(26, -82, 30, '#58cf55', '#2a6a28', 4); circle(0, -104, 46, '#4cc24a'); }
+  else { ctx.beginPath(); ctx.moveTo(-44, -60); ctx.lineTo(0, -150); ctx.lineTo(44, -60); ctx.closePath(); fs('#3fb04a', '#1f6a2a', 4); ctx.beginPath(); ctx.moveTo(-36, -92); ctx.lineTo(0, -168); ctx.lineTo(36, -92); ctx.closePath(); fs('#4cc255', '#1f6a2a', 4); }
+  ctx.restore();
+}
+
+function drawBackground() {
+  const hz = L.horizon;
+  // небо
+  const g = ctx.createLinearGradient(0, 0, 0, hz); g.addColorStop(0, '#55bfff'); g.addColorStop(1, '#d4f0ff');
+  ctx.fillStyle = g; ctx.fillRect(0, 0, WU, hz + 2);
+  // солнце
+  ctx.save(); ctx.translate(WU * .84, 100);
+  ctx.rotate(time * .15); ctx.fillStyle = 'rgba(255,230,90,.55)';
+  for (let i = 0; i < 12; i++) { ctx.rotate(TAU / 12); ctx.beginPath(); ctx.moveTo(-8, -62); ctx.lineTo(0, -92); ctx.lineTo(8, -62); ctx.closePath(); ctx.fill(); }
+  ctx.rotate(-time * .15);
+  circle(0, 0, 54, '#ffe14a', '#ffb800', 4);
+  circle(-17, -8, 5, '#7a4a00'); circle(17, -8, 5, '#7a4a00');
+  ctx.strokeStyle = '#7a4a00'; ctx.lineWidth = 4; ctx.beginPath(); ctx.arc(0, 4, 20, .2 * PI, .8 * PI); ctx.stroke();
+  ctx.restore();
+  // облака
+  const span = WU + 500;
+  decor.clouds.forEach(c => { const sx = (((c.x - cam * .12 + time * c.sp) % span) + span) % span - 250; drawCloud(sx, c.y, c.s); });
+  // холмы
+  [[.18, '#a6e08f', 46, .006, 0], [.3, '#86d070', 34, .011, 80]].forEach(h => {
+    ctx.beginPath(); ctx.moveTo(0, hz + 2);
+    for (let sx = 0; sx <= WU + 20; sx += 20) { const wx = sx + cam * h[0]; ctx.lineTo(sx, hz - h[2] * (.55 + .45 * Math.sin(wx * h[3] + h[4]) * Math.cos(wx * h[3] * .37 + 1))); }
+    ctx.lineTo(WU + 20, hz + 2); ctx.closePath(); ctx.fillStyle = h[1]; ctx.fill();
+  });
+  // дома вдали + кран «как за окном»
+  const off = cam * .45;
+  decor.skyline.forEach(b => {
+    const sx = b.x - off; if (sx > WU + 120 || sx < -200) return;
+    ctx.fillStyle = b.c; ctx.fillRect(sx, hz - b.h, b.w, b.h + 2);
+    ctx.fillStyle = 'rgba(255,255,255,.55)';
+    for (let wy = hz - b.h + 12; wy < hz - 14; wy += 24) for (let wx = sx + 9; wx < sx + b.w - 12; wx += 20) ctx.fillRect(wx, wy, 10, 13);
+    ctx.fillStyle = 'rgba(0,0,0,.08)'; ctx.fillRect(sx + b.w - 8, hz - b.h, 8, b.h + 2);
+    if (b.cr) drawCrane(sx + b.w / 2, hz - b.h + 6, 170, 120, time, .62, false);
+  });
+  // трава
+  const gg = ctx.createLinearGradient(0, hz, 0, HU); gg.addColorStop(0, '#9be063'); gg.addColorStop(.5, '#6cc84a'); gg.addColorStop(1, '#58b83e');
+  ctx.fillStyle = gg; ctx.fillRect(0, hz, WU, HU - hz);
+}
+
+function drawWorldBack() {
+  ctx.save(); ctx.translate(-cam, 0);
+  const rt = L.roadTop, hz = L.horizon;
+  // стройплощадка
+  const sx0 = SITE.x0;
+  ctx.fillStyle = '#dcb987'; ctx.fillRect(sx0, hz + 6, WORLD - sx0 + 200, rt - hz - 4);
+  ctx.fillStyle = 'rgba(150,110,60,.28)'; for (let i = 0; i < 30; i++) ctx.fillRect(sx0 + 40 + i * 46, hz + 24 + (i * 37) % 40, 22, 5);
+  // цветы
+  decor.flowers.forEach(f => { const y = hz + 10 + f.y * (rt - hz - 14); if (f.x > sx0) return; const sx = f.x - cam; if (sx < -20 || sx > WU + 20) return; circle(f.x, y, 3, f.c); });
+  // деревья
+  decor.trees.forEach(t => { const sx = t.x - cam; if (sx < -120 || sx > WU + 120) return; drawTree(t.x, rt - 16, t.s, t.t); });
+  // стройка
+  drawBuildingFrame(2600, rt - 6);
+  drawCrane(SITE.craneX, rt - 4, 360, 280, time, 1, true);
+  drawCone(sx0 + 20, rt + 4, 1); drawCone(sx0 + 90, rt - 4, .8); drawCone(3200, rt - 2, .9); drawCone(3560, rt + 6, 1);
+  drawGate(SITE.gate - 330, rt - 8);
+  ctx.restore();
+}
+
+function drawRoad() {
+  const rt = L.roadTop, rb = L.roadBot;
+  ctx.fillStyle = '#6b7280'; ctx.fillRect(0, rt, WU, rb - rt);
+  const g = ctx.createLinearGradient(0, rt, 0, rb); g.addColorStop(0, 'rgba(0,0,0,.18)'); g.addColorStop(.2, 'rgba(0,0,0,0)'); ctx.fillStyle = g; ctx.fillRect(0, rt, WU, rb - rt);
+  // бордюры
+  for (let sx = -((cam % 60) + 60); sx < WU + 60; sx += 60) {
+    const i = Math.round((sx + cam) / 60);
+    ctx.fillStyle = i % 2 ? '#fff' : '#ff6b6b'; ctx.fillRect(sx, rt - 7, 60, 9);
+    ctx.fillStyle = i % 2 ? '#e8e8e8' : '#e05555'; ctx.fillRect(sx, rb, 60, 9);
+  }
+  // разметка
+  ctx.fillStyle = '#ffe9a0'; const my = (rt + rb) / 2 - 3;
+  for (let sx = -((cam % 120) + 120); sx < WU + 120; sx += 120) ctx.fillRect(sx, my, 64, 6);
+  // зона выгрузки (жёлто-чёрная полоса на дороге)
+  const zx = SITE.x0 - cam;
+  if (zx < WU + 100) {
+    ctx.save(); ctx.beginPath(); ctx.rect(Math.max(zx, -10), rt, WU + 200, 10); ctx.clip();
+    for (let sx = zx; sx < WU + 100; sx += 36) { ctx.fillStyle = '#ffd233'; ctx.fillRect(sx, rt, 18, 10); ctx.fillStyle = '#222'; ctx.fillRect(sx + 18, rt, 18, 10); }
+    ctx.restore();
+  }
+}
+
+function drawFront() {
+  // цветы и травка на переднем плане
+  ctx.save(); ctx.translate(-cam * 1.1, 0);
+  decor.flowers.forEach((f, i) => {
+    if (i % 2) return; const x = f.x * 1, y = L.roadBot + 24 + f.y * (HU - L.roadBot - 30);
+    const sx = x - cam * 1.1; if (sx < -20 || sx > WU + 20) return;
+    ctx.strokeStyle = '#3c9a2c'; ctx.lineWidth = 2; ctx.beginPath(); ctx.moveTo(x, y); ctx.lineTo(x, y + 10); ctx.stroke(); circle(x, y, 4, f.c);
+  });
+  ctx.restore();
+}
+
+/* ======================= подсказки ======================= */
+function drawArrow(tx, ty, strong) {
+  const bob = Math.sin(time * 6) * 10;
+  ctx.save(); ctx.translate(tx, ty + bob);
+  ctx.beginPath(); ctx.moveTo(-26, -50); ctx.lineTo(26, -50); ctx.lineTo(26, -18); ctx.lineTo(44, -18); ctx.lineTo(0, 26); ctx.lineTo(-44, -18); ctx.lineTo(-26, -18); ctx.closePath();
+  fs(strong ? '#ffe14a' : '#ffd233', '#c26a00', 5);
+  ctx.restore();
+}
+function nearestPile() { let b = null, bd = 1e9; for (const p of PILES) { const d = Math.abs(truck.x - p.x); if (d < bd) { bd = d; b = p; } } return { p: b, d: bd }; }
+const nearSite = () => truck.x > SITE.x0 + 40;
+function hint() {
+  if (action) return;
+  let tx, ty, near = false;
+  if (!truck.cargo) { const n = nearestPile(); tx = n.p.x; ty = L.roadTop - 150; near = n.d < 230; }
+  else { tx = nearSite() ? truck.x - truck.dir * 150 : SITE.gate; ty = nearSite() ? truck.y - 250 * truck.scale : L.roadTop - 190; near = nearSite(); }
+  const sx = tx - cam;
+  if (sx > WU - 50) { ctx.save(); ctx.translate(WU - 46, HU * .36 + Math.sin(time * 6) * 8); ctx.beginPath(); ctx.moveTo(-30, -26); ctx.lineTo(0, -26); ctx.lineTo(0, -46); ctx.lineTo(34, 0); ctx.lineTo(0, 46); ctx.lineTo(0, 26); ctx.lineTo(-30, 26); ctx.closePath(); fs('#ffd233', '#c26a00', 5); ctx.restore(); }
+  else if (sx < 50) { ctx.save(); ctx.translate(46, HU * .36 + Math.sin(time * 6) * 8); ctx.scale(-1, 1); ctx.beginPath(); ctx.moveTo(-30, -26); ctx.lineTo(0, -26); ctx.lineTo(0, -46); ctx.lineTo(34, 0); ctx.lineTo(0, 46); ctx.lineTo(0, 26); ctx.lineTo(-30, 26); ctx.closePath(); fs('#ffd233', '#c26a00', 5); ctx.restore(); }
+  else drawArrow(tx, ty, near);
+  bLoad.classList.toggle('pulse', near);
+}
+
+/* ======================= HUD ======================= */
+function drawHUD() {
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  const s = clamp(H * .062, 26, 54), gap = s * .25, x0 = 14 + s / 2, y0 = 14 + s / 2;
+  rrect(8, 8, 5 * (s + gap) + gap + 4, s + 12, s * .5); ctx.fillStyle = 'rgba(40,70,120,.35)'; ctx.fill();
+  for (let i = 0; i < 5; i++) {
+    const cx = x0 + i * (s + gap) + 4, filled = i < stars;
+    starPath(cx, y0 + 2, s * .52, 0);
+    ctx.fillStyle = filled ? '#ffd633' : 'rgba(255,255,255,.4)'; ctx.fill();
+    ctx.strokeStyle = filled ? '#e09800' : 'rgba(255,255,255,.7)'; ctx.lineWidth = 3; ctx.lineJoin = 'round'; ctx.stroke();
+  }
+  if (popT > 0) {
+    const u = 1 - popT / 1.8, sc = easeOutBack(clamp(u * 3, 0, 1)) * (u > .75 ? 1 - (u - .75) * 4 : 1);
+    ctx.save(); ctx.translate(W / 2, H * .3); ctx.scale(sc, sc); ctx.rotate(Math.sin(u * 6) * .15);
+    const R = Math.min(W, H) * .17;
+    starPath(0, 0, R, time * 1.5); ctx.fillStyle = '#ffd633'; ctx.fill(); ctx.strokeStyle = '#e09800'; ctx.lineWidth = 8; ctx.lineJoin = 'round'; ctx.stroke();
+    circle(-R * .22, -R * .05, R * .06, '#7a4a00'); circle(R * .22, -R * .05, R * .06, '#7a4a00');
+    ctx.strokeStyle = '#7a4a00'; ctx.lineWidth = 6; ctx.lineCap = 'round'; ctx.beginPath(); ctx.arc(0, R * .08, R * .2, .15 * PI, .85 * PI); ctx.stroke();
+    ctx.restore();
+  }
+}
+
+/* ======================= действия ======================= */
+const bLoad = document.getElementById('bLoad'), bHonk = document.getElementById('bHonk'), bMute = document.getElementById('mute');
+
+function honk() {
+  initAudio(); sHonk(); truck.honk = 1;
+  if (lb && lb.appear >= 1 && Math.abs(truck.x - lb.x) < 380) ladyTap();
+}
+function pressLoad() {
+  initAudio();
+  if (action) return;
+  if (!truck.cargo) {
+    const n = nearestPile();
+    if (n.d < 230) { action = { kind: 'load', t: 0, dur: 1.9, pile: n.p, spawnT: 0 }; truck.cargo = n.p.type; truck.fill = 0; sLoad(); }
+    else sBump();
+  } else if (nearSite()) {
+    action = { kind: 'dump', t: 0, dur: 3.1, spawnT: 0, type: truck.cargo, gy: truck.y }; sDump();
+  } else sBump();
+}
+function ladyTap() {
+  if (!lb || lb.appear < 1 || lb.cool > 0) return;
+  lb.cool = 1.4; lb.jump = 1; lb.gift = 1; lb.giftT = 2.4;
+  sJingle();
+  const gx = lb.x + 105, gy = L.roadTop - 20;
+  hearts(lb.x, L.roadTop - 70, 8); burstStars(gx, gy, 18, 360); burstConfetti(gx, gy, 24); balloons(gx, gy, 6);
+}
+
+function spawnFly(pile, type) {
+  const T = truck, st = T.scale;
+  const base = L.roadTop + 8;
+  const sx = pile.x + rnd(-45, 45), sy = base - rnd(40, 110);
+  const ex = T.x - T.dir * rnd(40, 100) * st, ey = T.y - rnd(120, 150) * st;
+  const p = { k: 'fly', type, sx, sy, ex, ey, x: sx, y: sy, arc: rnd(80, 160), life: .55, vr: rnd(-8, 8) };
+  if (type === 'sand') { p.s = rnd(5, 8); p.c = '#e3b85a'; } else if (type === 'rocks') { p.s = rnd(9, 14); p.c = '#9aa1ad'; } else { p.s = rnd(18, 24); p.item = TOYS[Math.floor(rnd(0, TOYS.length))]; }
+  add(p);
+}
+function spawnDrop(act) {
+  const T = truck, st = T.scale, t = T.tilt;
+  const x = T.x + T.dir * st * (-156 - 62 * Math.sin(t)), y = T.y + st * (-86 - 62 * Math.cos(t));
+  const p = { k: 'drop', type: act.type, x, y, vx: -T.dir * rnd(40, 110), vy: rnd(-60, 0), gy: act.gy - rnd(0, 6), life: 9, vr: rnd(-6, 6) };
+  if (act.type === 'sand') { p.s = rnd(5, 8); p.c = '#e3b85a'; } else if (act.type === 'rocks') { p.s = rnd(10, 16); p.c = '#9aa1ad'; } else { p.s = rnd(18, 24); p.item = TOYS[Math.floor(rnd(0, TOYS.length))]; }
+  add(p);
+}
+
+function finishDump(act) {
+  const T = truck, st = T.scale;
+  const hx = T.x - T.dir * 200 * st;
+  heaps.push({ type: act.type, x: hx, y: act.gy, g: 0, s: st });
+  if (heaps.length > 5) heaps.shift();
+  P.forEach(p => { if (p.k === 'drop') p.life = Math.min(p.life, p.age + .35); });
+  T.cargo = null; T.fill = 0; T.tilt = 0;
+  delivered++; stars++; popT = 1.8;
+  burstStars(hx, act.gy - 90, 26, 460); burstConfetti(hx, act.gy - 90, 20);
+  if (stars >= 5) { celebrateT = 2.6; burstStars(T.x, T.y - 200, 40, 600); burstConfetti(T.x, T.y - 200, 50); sBig(); }
+  else sCheer();
+  if (delivered >= 3 && !lb) { lb = { x: SITE.x0 + 560, appear: 0, jump: 0, gift: 0, giftT: 0, cool: 0 }; setTimeout(() => { hearts(lb.x, L.roadTop - 80, 5); burstStars(lb.x, L.roadTop - 80, 12, 280); }, 700); }
+}
+
+/* ======================= обновление ======================= */
+function update(dt) {
+  const T = truck;
+  // ввод
+  let tx = 0, ly = 0;
+  if (!action) { if (keys.left) tx -= 1; if (keys.right) tx += 1; if (keys.up) ly -= 1; if (keys.down) ly += 1; }
+  if (tx) T.dir = tx;
+  T.vx += (tx - T.vx) * Math.min(1, dt * 4.5);
+  if (Math.abs(T.vx) < .005) T.vx = 0;
+  const dx = T.vx * 360 * dt;
+  T.x = clamp(T.x + dx, 120, WORLD - 120);
+  T.lane = clamp(T.lane + ly * dt * .8, 0, 1);
+  T.scale = .9 + .25 * T.lane; T.y = laneY(T.lane);
+  T.wheel += dx / (34 * T.scale);
+  T.honk = Math.max(0, T.honk - dt / 1.1);
+
+  // дым из трубы
+  T.smokeT -= dt;
+  if (T.smokeT <= 0) { T.smokeT = Math.abs(T.vx) > .1 ? .09 : .55; puff(T.x + T.dir * 6 * T.scale, T.y - 205 * T.scale, (Math.abs(T.vx) > .1 ? 10 : 7) * T.scale); }
+
+  // действия
+  if (action) {
+    const a = action; a.t += dt;
+    if (a.kind === 'load') {
+      a.spawnT -= dt;
+      if (a.t > .1 && a.t < 1.35 && a.spawnT <= 0) { a.spawnT = .06; spawnFly(a.pile, a.pile.type); }
+      T.fill = ease(clamp((a.t - .35) / 1.4, 0, 1));
+      T.tilt = Math.sin(clamp(a.t / a.dur, 0, 1) * PI) * .05;
+      if (a.t >= a.dur) { T.fill = 1; T.tilt = 0; action = null; burstStars(T.x - T.dir * 70 * T.scale, T.y - 150 * T.scale, 8, 200); }
+    } else {
+      const t = a.t;
+      if (t < .9) T.tilt = .62 * ease(t / .9);
+      else if (t < 2.0) T.tilt = .62 + Math.sin(t * 25) * .012;
+      else T.tilt = .62 * (1 - ease(clamp((t - 2.0) / 1.0, 0, 1)));
+      T.fill = t < .6 ? 1 : clamp(1 - (t - .6) / 1.4, 0, 1);
+      a.spawnT -= dt;
+      if (t > .7 && t < 2.0 && a.spawnT <= 0) { a.spawnT = .035; spawnDrop(a); }
+      if (t >= a.dur) { action = null; finishDump(a); }
+    }
+  }
+
+  // камера
+  const target = clamp(T.x + T.dir * 90 - WU / 2, 0, Math.max(0, WORLD - WU));
+  cam += (target - cam) * Math.min(1, dt * 3);
+  cam = clamp(cam, 0, Math.max(0, WORLD - WU));
+
+  // куча
+  heaps.forEach(h => { h.g = Math.min(1, h.g + dt * 2.2); });
+  // всякое
+  if (popT > 0) popT = Math.max(0, popT - dt);
+  if (celebrateT > 0) { celebrateT -= dt; if (Math.random() < dt * 10) burstConfetti(cam + rnd(80, WU - 80), rnd(30, 200), 6); if (celebrateT <= 0) stars = 0; }
+  if (lb) {
+    lb.appear = Math.min(1, lb.appear + dt * .8);
+    if (lb.jump > 0) lb.jump = Math.max(0, lb.jump - dt / .8);
+    if (lb.cool > 0) lb.cool -= dt;
+    if (lb.giftT > 0) { lb.giftT -= dt; if (lb.giftT <= 0) lb.gift = 0; }
+    if (lb.appear >= 1 && lb.cool <= 0 && Math.abs(T.x - lb.x) < 200 && !lb.greeted) { lb.greeted = true; hearts(lb.x, L.roadTop - 80, 3); }
+    if (Math.abs(T.x - lb.x) > 500) lb.greeted = false;
+  }
+  updateParticles(dt);
+
+  // звук мотора
+  if (engGain) {
+    const v = Math.abs(T.vx);
+    engGain.gain.setTargetAtTime(muted ? 0 : .012 + v * .05, ac.currentTime, .1);
+    engOsc.frequency.setTargetAtTime(44 + v * 34, ac.currentTime, .1);
+  }
+}
+
+/* ======================= отрисовка ======================= */
+function drawParticle(p) {
+  const u = p.age / p.life;
+  ctx.save(); ctx.translate(p.x, p.y);
+  switch (p.k) {
+    case 'fly': case 'drop': {
+      if (p.k === 'drop' && p.life - p.age < .35) ctx.globalAlpha = (p.life - p.age) / .35;
+      ctx.rotate(p.rot);
+      if (p.type === 'sand') circle(0, 0, p.s, p.c, 'rgba(138,90,26,.6)', 1.5);
+      else if (p.type === 'rocks') drawRock(0, 0, p.s, p.c);
+      else drawItem(p.item, 0, 0, p.s);
+      break;
+    }
+    case 'puff': ctx.globalAlpha = (1 - u) * .75; circle(0, 0, p.s * (1 + u * 1.6), p.c); break;
+    case 'star': ctx.globalAlpha = u > .7 ? (1 - u) / .3 : 1; starPath(0, 0, p.s, p.rot); fs('#ffd633', '#e09800', 2.5); break;
+    case 'conf': ctx.globalAlpha = u > .75 ? (1 - u) / .25 : 1; ctx.rotate(p.rot); ctx.fillStyle = p.c; ctx.fillRect(-p.s, -p.s * .5, p.s * 2, p.s); break;
+    case 'heart': ctx.globalAlpha = u > .6 ? (1 - u) / .4 : 1; heartPath(p.s); fs('#ff5c8a', '#c2185b', 2); break;
+    case 'balloon': {
+      ctx.globalAlpha = u > .85 ? (1 - u) / .15 : 1;
+      ctx.strokeStyle = 'rgba(60,60,60,.6)'; ctx.lineWidth = 1.5; ctx.beginPath(); ctx.moveTo(0, p.s * 1.1); ctx.quadraticCurveTo(8, p.s * 2, 0, p.s * 3); ctx.stroke();
+      ctx.beginPath(); ctx.ellipse(0, 0, p.s * .8, p.s, 0, 0, TAU); fs(p.c, 'rgba(0,0,0,.35)', 2);
+      ctx.fillStyle = 'rgba(255,255,255,.5)'; ctx.beginPath(); ctx.ellipse(-p.s * .28, -p.s * .35, p.s * .15, p.s * .3, .4, 0, TAU); ctx.fill();
+      break;
+    }
+  }
+  ctx.restore();
+}
+
+function render() {
+  ctx.setTransform(dpr * U, 0, 0, dpr * U, 0, 0);
+  drawBackground();
+  drawWorldBack();
+  drawRoad();
+  ctx.save(); ctx.translate(-cam, 0);
+  const items = [];
+  PILES.forEach(p => items.push({ y: L.roadTop + 8, d: () => drawPile(p.type, p.x, L.roadTop + 8, 1) }));
+  heaps.forEach(h => items.push({ y: h.y, d: () => drawPile(h.type, h.x, h.y, .55 * h.s * easeOutBack(h.g)) }));
+  if (lb) items.push({ y: L.roadTop + 18, d: drawLady });
+  items.push({ y: truck.y, d: drawTruck });
+  items.sort((a, b) => a.y - b.y).forEach(i => i.d());
+  P.forEach(drawParticle);
+  hint();
+  ctx.restore();
+  drawFront();
+  drawHUD();
+}
+
+/* ======================= управление ======================= */
+function bindHold(btn) {
+  const k = btn.dataset.k;
+  const down = e => { e.preventDefault(); initAudio(); try { btn.setPointerCapture(e.pointerId); } catch (_) { } keys[k] = true; btn.classList.add('down'); };
+  const up = () => { keys[k] = false; btn.classList.remove('down'); };
+  btn.addEventListener('pointerdown', down);
+  ['pointerup', 'pointercancel', 'lostpointercapture', 'pointerleave'].forEach(ev => btn.addEventListener(ev, up));
+  btn.addEventListener('contextmenu', e => e.preventDefault());
+}
+document.querySelectorAll('.dir').forEach(bindHold);
+function bindTap(btn, fn) {
+  btn.addEventListener('pointerdown', e => { e.preventDefault(); btn.classList.add('down'); fn(); });
+  ['pointerup', 'pointercancel', 'pointerleave'].forEach(ev => btn.addEventListener(ev, () => btn.classList.remove('down')));
+  btn.addEventListener('contextmenu', e => e.preventDefault());
+}
+bindTap(bLoad, pressLoad); bindTap(bHonk, honk);
+bMute.addEventListener('pointerdown', e => {
+  e.preventDefault(); initAudio(); muted = !muted; bMute.textContent = muted ? '🔇' : '🔊';
+  if (master) master.gain.value = muted ? 0 : .8;
+});
+
+cv.addEventListener('pointerdown', e => {
+  e.preventDefault(); initAudio();
+  const ux = e.clientX / U + cam, uy = e.clientY / U;
+  if (lb && lb.appear >= 1 && Math.hypot(ux - lb.x, uy - (L.roadTop - 30)) < 100) { ladyTap(); return; }
+  if (Math.abs(ux - truck.x) < 170 * truck.scale && uy < truck.y && uy > truck.y - 200 * truck.scale) honk();
+});
+
+const KEYMAP = { ArrowLeft: 'left', a: 'left', ArrowRight: 'right', d: 'right', ArrowUp: 'up', w: 'up', ArrowDown: 'down', s: 'down' };
+window.addEventListener('keydown', e => {
+  const k = KEYMAP[e.key]; if (k) { keys[k] = true; initAudio(); e.preventDefault(); return; }
+  if (e.repeat) return;
+  if (e.key === ' ' || e.key === 'Enter') { e.preventDefault(); pressLoad(); }
+  else if (e.key === 'b' || e.key === 'h') honk();
+});
+window.addEventListener('keyup', e => { const k = KEYMAP[e.key]; if (k) keys[k] = false; });
+window.addEventListener('blur', () => { for (const k in keys) keys[k] = false; document.querySelectorAll('.btn.down').forEach(b => b.classList.remove('down')); });
+document.addEventListener('gesturestart', e => e.preventDefault());
+document.addEventListener('dblclick', e => e.preventDefault());
+
+/* ======================= цикл ======================= */
+let last = performance.now();
+function frame(now) {
+  const dt = Math.min(.05, (now - last) / 1000); last = now; time += dt;
+  update(dt); render();
+  requestAnimationFrame(frame);
+}
+cam = clamp(truck.x - WU / 2, 0, WORLD - WU);
+requestAnimationFrame(frame);
+window.__game = { truck, keys, PILES, SITE, pressLoad, honk, get state() { return { stars, delivered, action, lb: !!lb, cargo: truck.cargo }; } };
+})();
+</script>
+</body>
+</html>
